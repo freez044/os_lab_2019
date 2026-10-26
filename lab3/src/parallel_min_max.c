@@ -4,11 +4,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
 #include <getopt.h>
 
@@ -40,18 +40,24 @@ int main(int argc, char **argv) {
         switch (option_index) {
           case 0:
             seed = atoi(optarg);
-            // your code here
-            // error handling
+            if (seed <= 0) {
+              printf("seed must be a positive number\n");
+              return 1;
+            }
             break;
           case 1:
             array_size = atoi(optarg);
-            // your code here
-            // error handling
+            if (array_size <= 0) {
+              printf("array_size must be a positive number\n");
+              return 1;
+            }
             break;
           case 2:
             pnum = atoi(optarg);
-            // your code here
-            // error handling
+            if (pnum <= 0) {
+              printf("pnum must be a positive number\n");
+              return 1;
+            }
             break;
           case 3:
             with_files = true;
@@ -88,6 +94,14 @@ int main(int argc, char **argv) {
   GenerateArray(array, array_size, seed);
   int active_child_processes = 0;
 
+  int fd[2];
+  if (!with_files && pipe(fd) == -1) {
+    perror("pipe");
+    return 1;
+  }
+
+  int chunk = array_size / pnum;
+
   struct timeval start_time;
   gettimeofday(&start_time, NULL);
 
@@ -98,15 +112,27 @@ int main(int argc, char **argv) {
       active_child_processes += 1;
       if (child_pid == 0) {
         // child process
-
-        // parallel somehow
+        unsigned int begin = i * chunk;
+        unsigned int end = (i == pnum - 1) ? array_size : begin + chunk;
+        struct MinMax local = GetMinMax(array, begin, end);
 
         if (with_files) {
-          // use files here
+          char filename[32];
+          sprintf(filename, "min_max_%d.txt", i);
+          FILE *f = fopen(filename, "w");
+          if (f == NULL) {
+            perror("fopen");
+            exit(1);
+          }
+          fprintf(f, "%d %d", local.min, local.max);
+          fclose(f);
         } else {
-          // use pipe here
+          close(fd[0]);
+          write(fd[1], &local, sizeof(local));
+          close(fd[1]);
         }
-        return 0;
+        free(array);
+        exit(0);
       }
 
     } else {
@@ -115,8 +141,12 @@ int main(int argc, char **argv) {
     }
   }
 
+  if (!with_files) {
+    close(fd[1]);
+  }
+
   while (active_child_processes > 0) {
-    // your code here
+    wait(NULL);
 
     active_child_processes -= 1;
   }
@@ -130,13 +160,28 @@ int main(int argc, char **argv) {
     int max = INT_MIN;
 
     if (with_files) {
-      // read from files
+      char filename[32];
+      sprintf(filename, "min_max_%d.txt", i);
+      FILE *f = fopen(filename, "r");
+      if (f != NULL) {
+        fscanf(f, "%d %d", &min, &max);
+        fclose(f);
+        remove(filename);
+      }
     } else {
-      // read from pipes
+      struct MinMax local;
+      if (read(fd[0], &local, sizeof(local)) == sizeof(local)) {
+        min = local.min;
+        max = local.max;
+      }
     }
 
     if (min < min_max.min) min_max.min = min;
     if (max > min_max.max) min_max.max = max;
+  }
+
+  if (!with_files) {
+    close(fd[0]);
   }
 
   struct timeval finish_time;
